@@ -1,4 +1,4 @@
-FROM alpine:3.4
+FROM alpine:latest
 MAINTAINER Michael de Wit <michael@drillster.com>
 
 COPY cacher.sh /usr/local/
