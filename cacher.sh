@@ -6,7 +6,18 @@ if [ -z "$PLUGIN_MOUNT" ]; then
     exit 0
 fi
 
-export CACHE_ID="$DRONE_REPO_OWNER/$DRONE_REPO_NAME/$DRONE_COMMIT_BRANCH"
+
+if [ -z "$PLUGIN_CACHE_ID_FILE" ];then
+    export CACHE_ID="$DRONE_REPO_OWNER/$DRONE_REPO_NAME/$DRONE_COMMIT_BRANCH"
+else
+    if ! [ -e "$PLUGIN_CACHE_ID_FILE" ];then
+        echo "cache_id_file was specified but not not found: $PLUGIN_CACHE_ID_FILE does not exist"
+        exit 1
+    fi
+    export CACHE_ID="$(cat "$PLUGIN_CACHE_ID_FILE" | sha256sum | cut -f 1 -d ' ')"
+fi
+
+echo "Using CACHE_ID $CACHE_ID"
 
 if [[ $DRONE_COMMIT_MESSAGE == *"[CLEAR CACHE]"* && -n "$PLUGIN_RESTORE" && "$PLUGIN_RESTORE" == "true" ]]; then
     if [ -d "/cache/$CACHE_ID" ]; then
@@ -25,13 +36,14 @@ IFS=','; read -ra SOURCES <<< "$PLUGIN_MOUNT"
 if [[ -n "$PLUGIN_REBUILD" && "$PLUGIN_REBUILD" == "true" ]]; then
     # Create cache
     for source in "${SOURCES[@]}"; do
+        export FLOCK_LOCATION="/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source.lock"
         if [ -d "$source" ]; then
             echo "Rebuilding cache for folder $source..."
             mkdir -p "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source" && \
-                rsync -aHA --delete "$source/" "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source"
+                flock "$FLOCK_LOCATION" rsync -aHA --delete "$source/" "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source"
         elif [ -f "$source" ]; then
             echo "Rebuilding cache for file $source..."
-            rsync -aHA --delete "$source" "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/"
+            flock "$FLOCK_LOCATION" rsync -aHA --delete "$source" "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/"
         else
             echo "$source does not exist, removing from cached folder..."
             rm -rf "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source"
@@ -52,13 +64,14 @@ elif [[ -n "$PLUGIN_RESTORE" && "$PLUGIN_RESTORE" == "true" ]]; then
     fi
     # Restore from cache
     for source in "${SOURCES[@]}"; do
+        export FLOCK_LOCATION="/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source.lock"
         if [ -d "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source" ]; then
             echo "Restoring cache for folder $source..."
             mkdir -p "$source" && \
-                rsync -aHA --delete "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source/" "$source"
+                flock "$FLOCK_LOCATION" rsync -aHA --delete "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source/" "$source"
         elif [ -f "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source" ]; then
             echo "Restoring cache for file $source..."
-            rsync -aHA --delete "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source" "./"
+            flock "$FLOCK_LOCATION" rsync -aHA --delete "/cache/$CACHE_ID/$DRONE_JOB_NUMBER/$source" "./"
         else
             echo "No cache for $source"
         fi
